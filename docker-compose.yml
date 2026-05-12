@@ -1,0 +1,16 @@
+version: "3.8"
+
+services:
+  ddai-agent:
+    build: .
+    container_name: ddai-agent
+    ports:
+      - "8501:8501"
+    volumes:
+      # 持久化数据：SQLite数据库、上传文件、导出文件
+      - ./data:/app/data
+      # 挂载代码目录，方便热更新
+      - .:/app
+    env_file:
+      - .env
+    restart: unless-stopped

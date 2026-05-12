@@ -189,7 +189,7 @@ def _memory_panel(project_id: int):
             mt = st.selectbox("类型", options=MEMORY_TYPES,
                               format_func=lambda x: MEMORY_TYPE_LABELS.get(x, x), key=f"mt_{project_id}")
             kw = st.text_input("关键词", placeholder="逗号分隔", key=f"mkw_{project_id}")
-            ct = st.text_area("内容", height=60, placeholder="输入记忆内容...", key=f"mc_{project_id}")
+            ct = st.text_area("内容", height=68, placeholder="输入记忆内容...", key=f"mc_{project_id}")
             if st.form_submit_button("保存", use_container_width=True):
                 if ct.strip():
                     add_memory(mt, kw.strip(), ct.strip())

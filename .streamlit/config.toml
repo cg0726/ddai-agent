@@ -1,2 +1,5 @@
 [server]
 maxUploadSize = 10
+
+[global]
+developmentMode = false
