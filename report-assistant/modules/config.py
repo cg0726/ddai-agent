@@ -13,6 +13,7 @@ ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
 ZHIPUAI_KB_ID = os.getenv("ZHIPUAI_KB_ID", "")
 KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID") or ZHIPUAI_KB_ID or ""
 ZHIPUAI_BASE_URL = os.getenv("ZHIPUAI_BASE_URL", "https://open.bigmodel.cn/api/llm")
+ZHIPUAI_KB_BASE_URL = os.getenv("ZHIPUAI_KB_BASE_URL", "https://open.bigmodel.cn/api/llm-application")
 
 ZHIHU_ACCESS_SECRET = os.getenv("ZHIHU_ACCESS_SECRET", "")
 
@@ -21,7 +22,7 @@ EXTRACT_API_KEY = os.getenv("EXTRACT_API_KEY", "")
 EXTRACT_BASE_URL = os.getenv("EXTRACT_BASE_URL", "https://open.bigmodel.cn/api/llm")
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"

@@ -9,13 +9,152 @@ from modules.project import (
     save_message, get_conversation, get_export_info,
     set_export_path,
 )
-from modules.ui import render_sidebar, render_chat
+from modules.ui import render_sidebar, render_chat, render_chat_bottom
 from modules.export_manager import export_to_word
 
 init_db()
 
 if "current_project_id" not in st.session_state:
     st.session_state.current_project_id = None
+
+st.markdown("""
+<style>
+/* ── Global font size reduction ── */
+html, body, [class*="st-"], .stMarkdown, .stText, p, li, span, div {
+    font-size: 14px !important;
+}
+.stSelectbox label, .stCheckbox label {
+    font-size: 13px !important;
+}
+.stButton button {
+    font-size: 13px !important;
+}
+code, pre {
+    font-size: 12px !important;
+}
+h1 { font-size: 20px !important; }
+h2 { font-size: 17px !important; }
+h3 { font-size: 15px !important; }
+
+/* ── Hide Streamlit header toolbar (Deploy, menu, etc.) ── */
+header[data-testid="stHeader"] {
+    display: none !important;
+}
+#MainMenu {
+    display: none !important;
+}
+.stAppToolbar {
+    display: none !important;
+}
+div[data-testid="stToolbar"] {
+    display: none !important;
+}
+div[data-testid="stDecoration"] {
+    display: none !important;
+}
+
+/* ── Full height flex layout ── */
+.main > .block-container {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+    max-width: 100% !important;
+    height: 100vh !important;
+    display: flex !important;
+    flex-direction: column !important;
+}
+
+/* ── Fixed top bar ── */
+#top-bar {
+    flex-shrink: 0;
+    background: white;
+    padding: 6px 16px 2px 16px;
+    border-bottom: 1px solid #e0e0e0;
+    z-index: 999;
+}
+
+/* ── Scrollable chat area ── */
+#chat-area {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 6px 16px;
+}
+
+/* ── Fixed bottom bar ── */
+#bottom-bar {
+    flex-shrink: 0;
+    background: white;
+    padding: 4px 16px 8px 16px;
+    border-top: 1px solid #e0e0e0;
+    z-index: 999;
+}
+
+/* ── Unified bottom controls styling ── */
+#bottom-bar div[data-testid="stSelectbox"] {
+    min-height: 32px !important;
+}
+#bottom-bar div[data-testid="stSelectbox"] > div {
+    min-height: 32px !important;
+    font-size: 13px !important;
+}
+#bottom-bar div[data-testid="stSelectbox"] label {
+    font-size: 12px !important;
+    margin-bottom: 0 !important;
+}
+#bottom-bar div[data-testid="stCheckbox"] {
+    min-height: 32px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+#bottom-bar div[data-testid="stCheckbox"] label {
+    font-size: 13px !important;
+    gap: 4px !important;
+}
+
+/* ── Web search checkbox: green active, gray inactive ── */
+.web-search-active label span[data-testid="check"] svg {
+    fill: #22c55e !important;
+}
+.web-search-inactive label span[data-testid="check"] svg {
+    fill: #9ca3af !important;
+}
+
+/* ── Chat input styling ── */
+div[data-testid="stChatInput"] {
+    border: 1px solid #d0d0d0;
+    border-radius: 8px;
+    margin-top: 2px;
+}
+
+/* ── Sidebar font adjustment ── */
+section[data-testid="stSidebar"] {
+    font-size: 13px !important;
+}
+
+/* ── Tabs and form labels ── */
+.stTabs button {
+    font-size: 13px !important;
+}
+.stForm label {
+    font-size: 13px !important;
+}
+.stCaption {
+    font-size: 12px !important;
+}
+.stAlert {
+    font-size: 13px !important;
+}
+.stException {
+    font-size: 12px !important;
+}
+.stSelectbox small {
+    font-size: 11px !important;
+}
+.stSelectbox div[data-baseweb="select"] span {
+    font-size: 13px !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 if not check_password():
     st.stop()
@@ -66,7 +205,6 @@ if not active_projects:
                                                    use_container_width=True)
                         except FileNotFoundError:
                             st.caption("文件已移除")
-
     st.stop()
 
 if st.session_state.current_project_id is None:
@@ -80,14 +218,13 @@ if current_project is None:
         st.error("项目数据异常，请重新登录")
         st.stop()
 
-st.markdown(
-    f"<h1 style='text-align: center; font-size: 24px;'>📋 尽责报告助手 —— {current_project['name']}</h1>",
-    unsafe_allow_html=True,
-)
-
-project_names = {p["id"]: p["name"] for p in active_projects}
-col_top1, col_top2, col_top3, col_top4 = st.columns([3, 1, 1, 1])
-with col_top1:
+# ── Top bar ──
+st.markdown('<div id="top-bar">', unsafe_allow_html=True)
+col_t1, col_t2, col_t3, col_t4, col_t5 = st.columns([2, 2, 1, 1, 1])
+with col_t1:
+    st.markdown(f"**📋 {current_project['name']}**")
+with col_t2:
+    project_names = {p["id"]: p["name"] for p in active_projects}
     selected_id = st.selectbox(
         "切换项目",
         options=list(project_names.keys()),
@@ -105,22 +242,21 @@ with col_top1:
         for k in del_convo_cache:
             del st.session_state[k]
         st.rerun()
-
-with col_top2:
-    if st.button("➕ 新建项目", use_container_width=True):
+with col_t3:
+    if st.button("➕ 新建", use_container_width=True):
         st.session_state.show_new_project = True
         st.rerun()
-
-with col_top3:
-    if st.button("📄 导出Word", use_container_width=True):
+with col_t4:
+    if st.button("📄 导出", use_container_width=True):
         st.session_state.show_export = True
         st.rerun()
-
-with col_top4:
-    if st.button("✔️ 完成项目", use_container_width=True, type="primary"):
+with col_t5:
+    if st.button("✔️ 完成", use_container_width=True, type="primary"):
         st.session_state.show_complete_confirm = True
         st.rerun()
+st.markdown('</div>', unsafe_allow_html=True)
 
+# ── Popovers ──
 if st.session_state.get("show_new_project"):
     with st.popover("新建项目", use_container_width=True):
         with st.form("new_project_form"):
@@ -159,16 +295,13 @@ if st.session_state.get("show_export"):
 if st.session_state.get("show_complete_confirm"):
     with st.popover("确认完成项目", use_container_width=True):
         export_info = get_export_info(st.session_state.current_project_id)
-
         if not export_info["has_export"]:
             st.warning("⚠️ 尚未导出Word文档。")
             st.caption("建议先点击「📄 导出Word」生成并下载报告，再完成项目。")
             st.markdown("---")
-
         st.warning(f"确定要完成项目「{current_project['name']}」吗？")
         st.caption("完成后将清理所有中间数据：① 删除智谱知识库文件 ② 删除本地上传文件 ③ 清除对话记录。仅保留导出的Word文档。")
-
-        c1, c2, c3 = st.columns([1, 1, 1])
+        c1, c2 = st.columns(2)
         with c1:
             if st.button("✅ 确认完成", use_container_width=True, type="primary"):
                 summary = complete_project(st.session_state.current_project_id)
@@ -193,8 +326,8 @@ if st.session_state.get("show_complete_confirm"):
                 st.session_state.show_complete_confirm = False
                 st.rerun()
 
-st.markdown("---")
-
+# ── Main chat area (scrollable) ──
+st.markdown('<div id="chat-area">', unsafe_allow_html=True)
 current_project_id = st.session_state.current_project_id
 if current_project_id is not None:
     convo_cache_key = f"convo_loaded_{current_project_id}"
@@ -203,8 +336,15 @@ if current_project_id is not None:
         st.session_state[convo_cache_key] = True
     files = render_sidebar(current_project_id)
     render_chat(current_project_id)
+st.markdown('</div>', unsafe_allow_html=True)
 
-# ── 已完成项目列表（底部） ──
+# ── Bottom bar (fixed: controls + input) ──
+st.markdown('<div id="bottom-bar">', unsafe_allow_html=True)
+if current_project_id is not None:
+    render_chat_bottom(current_project_id)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# ── Completed projects (collapsible, at very bottom) ──
 if completed_projects:
     st.markdown("---")
     with st.expander(f"📁 已完成项目 ({len(completed_projects)} 个)", expanded=False):

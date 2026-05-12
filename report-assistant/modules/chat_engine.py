@@ -13,8 +13,8 @@ from modules.search_manager import search_and_format
 
 
 MODEL_MAP = {
-    "Flash": "deepseek-chat",
-    "Pro": "deepseek-chat-pro",
+    "Flash": "deepseek-v4-flash",
+    "Pro": "deepseek-v4-pro",
 }
 
 
@@ -43,28 +43,23 @@ def _deepseek_stream(api_key: str, base_url: str, messages: list, model: str) ->
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
-            buffer = ""
-            while True:
-                chunk = resp.read(1)
-                if not chunk:
+            for line_raw in resp:
+                if not line_raw:
                     break
-                buffer += chunk.decode("utf-8")
-                if buffer.endswith("\n"):
-                    for line in buffer.strip().split("\n"):
-                        if line.startswith("data: "):
-                            content = line[6:].strip()
-                            if content == "[DONE]":
-                                return
-                            if content:
-                                try:
-                                    parsed = json.loads(content)
-                                    delta = parsed.get("choices", [{}])[0].get("delta", {})
-                                    text = delta.get("content", "")
-                                    if text:
-                                        yield text
-                                except json.JSONDecodeError:
-                                    pass
-                    buffer = ""
+                line = line_raw.decode("utf-8", errors="replace").strip()
+                if not line or not line.startswith("data:"):
+                    continue
+                content = line[5:].strip()
+                if not content or content == "[DONE]":
+                    continue
+                try:
+                    parsed = json.loads(content)
+                    delta = parsed.get("choices", [{}])[0].get("delta", {})
+                    text = delta.get("content", "")
+                    if text:
+                        yield text
+                except json.JSONDecodeError:
+                    pass
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
         yield f"\n\n**API错误** (HTTP {e.code}): {error_body}"
@@ -181,7 +176,7 @@ def _auto_learn(project_id: int, query: str, response: str):
         return
 
     full_response = ""
-    for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-chat"):
+    for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-v4-flash"):
         full_response += chunk
 
     if "NONE" in full_response.strip():
@@ -211,7 +206,7 @@ def chat(project_id: int, query: str, model: str, mode: str, web_search_enabled:
         yield "**❌ DEEPSEEK_API_KEY 未配置**\n\n请在 .env 文件中设置 DEEPSEEK_API_KEY。"
         return
 
-    deepseek_model = MODEL_MAP.get(model, "deepseek-chat")
+    deepseek_model = MODEL_MAP.get(model, "deepseek-v4-flash")
 
     messages, context = _build_messages(project_id, query, mode, web_search_enabled)
 
@@ -261,7 +256,7 @@ def extract_sections(project_id: int, query: Optional[str] = None) -> list:
     ]
 
     full_response = ""
-    for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-chat"):
+    for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-v4-flash"):
         full_response += chunk
 
     try:

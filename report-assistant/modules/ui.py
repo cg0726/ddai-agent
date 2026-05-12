@@ -3,7 +3,7 @@ import streamlit as st
 from pathlib import Path
 from modules.config import UPLOAD_CATEGORIES, UPLOAD_DIR, UPLOAD_MAX_SIZE
 from modules.project import (
-    add_file, get_files,
+    add_file, get_files, update_file_kb_status,
     add_memory, update_memory, delete_memory, get_memories,
     MEMORY_TYPES, MEMORY_TYPE_LABELS,
     get_messages, add_message, get_project_config,
@@ -14,6 +14,8 @@ from modules.knowledge_manager import (
     CATEGORY_LABEL_MAP,
     upload_to_knowledge,
     check_template_status,
+    get_embedding_status,
+    reembed_document,
 )
 from modules.search_manager import search_and_format
 from modules.chat_engine import chat, extract_sections
@@ -61,11 +63,21 @@ def render_sidebar(project_id: int):
                             file_path = project_dir / uploaded_file.name
                             with open(file_path, "wb") as f:
                                 f.write(uploaded_file.getbuffer())
-                            add_file(project_id, cat_key, uploaded_file.name, str(file_path))
+
                             category_label = CATEGORY_LABEL_MAP.get(cat_key, "other")
                             kb_result = upload_to_knowledge(str(file_path), category_label, project_id)
+
                             if kb_result["success"]:
-                                status_placeholder.success(f"✅ {uploaded_file.name} 已入库")
+                                kb_status = kb_result.get("kb_status", {})
+                                add_file(project_id, cat_key, uploaded_file.name, str(file_path),
+                                         kb_doc_id=kb_status.get("doc_id", ""),
+                                         kb_status=kb_status)
+                                if kb_status.get("status") == "completed":
+                                    status_placeholder.success(f"✅ {uploaded_file.name} 已入库 — 向量化完成")
+                                elif kb_status.get("status") == "failed":
+                                    status_placeholder.warning(f"⚠️ {uploaded_file.name} 上传成功，但向量化失败: {kb_status.get('fail_reason', '未知')}")
+                                else:
+                                    status_placeholder.success(f"✅ {uploaded_file.name} 已入库 — {kb_status.get('status_text', '向量化处理中')}")
                                 st.session_state[upload_state_key] = "success"
                             else:
                                 status_placeholder.error(f"❌ {uploaded_file.name} 入库失败: {kb_result['error']}")
@@ -74,7 +86,38 @@ def render_sidebar(project_id: int):
                 existing = [f for f in get_files(project_id) if f["category"] == cat_key]
                 if existing:
                     for f in existing:
-                        st.caption(f"📄 {f['filename']}")
+                        kb_status_raw = f.get("kb_status", "")
+                        kb_doc_id = f.get("kb_doc_id", "")
+                        try:
+                            kb_status = json.loads(kb_status_raw) if isinstance(kb_status_raw, str) and kb_status_raw else {}
+                        except (json.JSONDecodeError, TypeError):
+                            kb_status = {}
+
+                        if kb_doc_id and kb_status.get("status") not in ("completed", "failed"):
+                            fresh = get_embedding_status(kb_doc_id)
+                            if fresh["success"]:
+                                kb_status = fresh
+                                update_file_kb_status(f["id"], kb_doc_id=kb_doc_id, kb_status=fresh)
+
+                        status_str = ""
+                        if kb_status.get("status") == "completed":
+                            status_str = "✅"
+                        elif kb_status.get("status") == "failed":
+                            status_str = "❌"
+                        elif kb_doc_id:
+                            status_str = "⏳"
+                        st.caption(f"{status_str} {f['filename']}")
+
+                        if kb_status.get("status") == "failed" and kb_doc_id:
+                            if st.button("🔄 重新向量化", key=f"reembed_{f['id']}"):
+                                with st.spinner("重新向量化..."):
+                                    reembed_document(kb_doc_id)
+                                    new_emb = get_embedding_status(kb_doc_id)
+                                    update_file_kb_status(f["id"], kb_doc_id=kb_doc_id, kb_status=new_emb)
+                                st.rerun()
+                        elif kb_status.get("status") not in ("completed", "failed") and kb_doc_id:
+                            if st.button("🔄 刷新状态", key=f"refresh_emb_{f['id']}"):
+                                st.rerun()
         st.markdown("---")
         render_memory_panel(project_id)
     return get_files(project_id)
@@ -142,46 +185,12 @@ def render_memory_panel(project_id: int):
                             st.rerun()
 
 
-def render_chat(project_id: int):
+def render_chat(project_id: int, fixed_bottom: bool = False):
+    """Render chat messages and report mode section (scrollable area)."""
     config = get_project_config(project_id)
+    current_mode = config["mode"]
 
-    st.markdown("### 💬 对话")
-    col1, col2, col3 = st.columns([1, 1, 1])
-    with col1:
-        model = st.selectbox("模型", ["Flash", "Pro"],
-                             index=0 if config["model"] == "Flash" else 1,
-                             key=f"model_{project_id}", label_visibility="collapsed")
-    with col2:
-        new_mode = st.selectbox("模式", ["问答", "报告"],
-                                index=0 if config["mode"] == "问答" else 1,
-                                key=f"mode_{project_id}", label_visibility="collapsed")
-    with col3:
-        web_search = st.checkbox("联网搜索", value=config["web_search"], key=f"web_{project_id}")
-
-    mode_changed = new_mode != config["mode"]
-    if mode_changed:
-        update_project_config(project_id, mode=new_mode)
-        if new_mode == "报告":
-            sections = get_sections(project_id)
-            if not sections:
-                with st.spinner("正在提取报告章节结构..."):
-                    sections = extract_sections(project_id)
-            template_status = check_template_status(project_id)
-            if template_status["message"]:
-                if template_status["has_previous"]:
-                    st.info(f"ℹ️ {template_status['message']}")
-                else:
-                    st.warning(f"⚠️ {template_status['message']}")
-        st.rerun()
-
-    if model != config["model"]:
-        update_project_config(project_id, model=model)
-    if web_search != config["web_search"]:
-        update_project_config(project_id, web_search=int(web_search))
-
-    current_mode = new_mode
-
-    # ── 报告模式：章节进度与生成 ──
+    # ── 报告模式：章节进度与生成（在滚动区域中） ──
     if current_mode == "报告":
         sections = get_sections(project_id)
         if not sections:
@@ -194,19 +203,13 @@ def render_chat(project_id: int):
 
         current = get_current_section(project_id)
         if current is None and progress["confirmed"] > 0:
-            st.success("🎉 **所有章节已完成！** 请在左侧导出文档。")
+            st.success("🎉 **所有章节已完成！** 请导出文档。")
         elif current is not None:
             idx = current["_index"]
-            gen_key = f"gen_sec_{project_id}_{idx}"
             result_key = f"sec_result_{project_id}_{idx}"
-            showing_key = f"showing_sec_{project_id}"
 
             with st.expander(f"📄 当前章节：{current['title']}", expanded=True):
                 st.caption(current.get("description", ""))
-
-                if st.session_state.get(showing_key) != idx:
-                    st.session_state[showing_key] = idx
-
                 if result_key not in st.session_state:
                     st.session_state[result_key] = None
 
@@ -218,7 +221,7 @@ def render_chat(project_id: int):
                             placeholder.info("⏳ 正在生成，请稍候...")
                             full = ""
                             prompt = f"请撰写尽责调查报告的「{current['title']}」章节。{current.get('description', '')}"
-                            for chunk in chat(project_id, prompt, model, current_mode, web_search):
+                            for chunk in chat(project_id, prompt, config["model"], current_mode, config["web_search"]):
                                 full += chunk
                                 placeholder.markdown(full + "▌")
                             placeholder.markdown(full)
@@ -228,8 +231,7 @@ def render_chat(project_id: int):
                     st.markdown(st.session_state[result_key])
                     c_a, c_b, c_c = st.columns(3)
                     with c_a:
-                        if st.button("✅ 接受", key=f"accept_{project_id}_{idx}", use_container_width=True,
-                                     type="primary"):
+                        if st.button("✅ 接受", key=f"accept_{project_id}_{idx}", use_container_width=True, type="primary"):
                             content = st.session_state[result_key]
                             confirm_section(project_id, idx, content)
                             st.session_state[result_key] = None
@@ -253,7 +255,7 @@ def render_chat(project_id: int):
                     edit_key = f"edit_mode_{project_id}_{idx}"
                     if st.session_state.get(edit_key):
                         edited = st.text_area("编辑内容", value=st.session_state[result_key],
-                                              height=300, key=f"editor_{project_id}_{idx}")
+                                              height=200, key=f"editor_{project_id}_{idx}")
                         ec1, ec2 = st.columns(2)
                         with ec1:
                             if st.button("💾 保存修改", key=f"save_edit_{project_id}_{idx}",
@@ -273,7 +275,7 @@ def render_chat(project_id: int):
                     rewrite_key = f"rewrite_input_{project_id}_{idx}"
                     if st.session_state.get(rewrite_key):
                         feedback = st.text_area("重写意见", placeholder="请说明需要修改的方向...",
-                                                key=f"feedback_{project_id}_{idx}", height=100)
+                                                key=f"feedback_{project_id}_{idx}", height=80)
                         rc1, rc2 = st.columns(2)
                         with rc1:
                             if st.button("🔄 重新生成", key=f"do_rewrite_{project_id}_{idx}",
@@ -288,30 +290,71 @@ def render_chat(project_id: int):
                                 st.rerun()
 
     # ── 对话历史 ──
-    st.markdown("---")
     messages = get_messages(project_id)
     for msg in messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # ── 用户输入 ──
-    prompt = st.chat_input("请输入您的问题..." if current_mode != "报告" else "请输入对该章节的补充要求...")
+
+def render_chat_bottom(project_id: int):
+    """Render fixed bottom bar with model/mode controls and chat input."""
+    config = get_project_config(project_id)
+
+    col_b1, col_b2, col_b3 = st.columns([1, 1, 1])
+    with col_b1:
+        model = st.selectbox("模型", ["Flash", "Pro"],
+                             index=0 if config["model"] == "Flash" else 1,
+                             key=f"model_bottom_{project_id}", label_visibility="collapsed")
+    with col_b2:
+        new_mode = st.selectbox("模式", ["问答", "报告"],
+                                index=0 if config["mode"] == "问答" else 1,
+                                key=f"mode_bottom_{project_id}", label_visibility="collapsed")
+    with col_b3:
+        web_search_val = config["web_search"]
+        web_class = "web-search-active" if web_search_val else "web-search-inactive"
+        st.markdown(f'<div class="{web_class}">', unsafe_allow_html=True)
+        web_search = st.checkbox("联网搜索", value=web_search_val,
+                                 key=f"web_bottom_{project_id}")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    mode_changed = new_mode != config["mode"]
+    if mode_changed:
+        update_project_config(project_id, mode=new_mode)
+        if new_mode == "报告":
+            sections = get_sections(project_id)
+            if not sections:
+                with st.spinner("正在提取报告章节结构..."):
+                    extract_sections(project_id)
+            template_status = check_template_status(project_id)
+            if template_status["message"]:
+                if template_status["has_previous"]:
+                    st.info(f"ℹ️ {template_status['message']}")
+                else:
+                    st.warning(f"⚠️ {template_status['message']}")
+        st.rerun()
+
+    if model != config["model"]:
+        update_project_config(project_id, model=model)
+    if web_search != config["web_search"]:
+        update_project_config(project_id, web_search=int(web_search))
+
+    current_mode = new_mode
+    prompt = st.chat_input("请输入您的问题..." if current_mode != "报告" else "请输入对该章节的补充要求...",
+                           key=f"chat_input_{project_id}")
     if prompt:
+        cfg = get_project_config(project_id)
         add_message(project_id, "user", prompt)
         st.chat_message("user").markdown(prompt)
         with st.chat_message("assistant"):
             placeholder = st.empty()
             placeholder.info("⏳ 正在生成回答...")
-
             sources_list = []
             full_response = ""
-            for chunk in chat(project_id, prompt, model, current_mode, web_search):
+            for chunk in chat(project_id, prompt, cfg["model"], cfg["mode"], cfg["web_search"]):
                 full_response += chunk
                 placeholder.markdown(full_response + "▌")
-
             placeholder.markdown(full_response)
-
-            if web_search:
+            if cfg["web_search"]:
                 search_result = search_and_format(prompt, use_extract=False)
                 if search_result["success"]:
                     for item in search_result.get("results", []):
@@ -321,7 +364,6 @@ def render_chat(project_id: int):
                             "weight": item["weight"],
                             "url": item["url"],
                         })
-
             add_message(project_id, "assistant", full_response,
                         sources=sources_list if sources_list else None)
         st.rerun()

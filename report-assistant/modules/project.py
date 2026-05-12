@@ -90,6 +90,19 @@ def init_db():
         except sqlite3.OperationalError:
             pass
 
+    cur4 = conn.execute("PRAGMA table_info(files)")
+    file_cols = {r["name"] for r in cur4.fetchall()}
+    if "kb_doc_id" not in file_cols:
+        try:
+            conn.execute("ALTER TABLE files ADD COLUMN kb_doc_id TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+    if "kb_status" not in file_cols:
+        try:
+            conn.execute("ALTER TABLE files ADD COLUMN kb_status TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
+
     cur2 = conn.execute("PRAGMA table_info(messages)")
     msg_cols = {r["name"] for r in cur2.fetchall()}
     if "sources" not in msg_cols:
@@ -253,13 +266,33 @@ def get_completed_projects():
 
 # ───────────────────── 文件管理 ─────────────────────
 
-def add_file(project_id: int, category: str, filename: str, filepath: str):
+def add_file(project_id: int, category: str, filename: str, filepath: str,
+             kb_doc_id: str = "", kb_status: str = ""):
     now = datetime.now().isoformat()
+    kb_status_json = json.dumps(kb_status, ensure_ascii=False) if isinstance(kb_status, dict) else (kb_status or "")
     conn = get_conn()
     conn.execute(
-        "INSERT INTO files (project_id, category, filename, filepath, uploaded_at) VALUES (?, ?, ?, ?, ?)",
-        [project_id, category, filename, filepath, now],
+        "INSERT INTO files (project_id, category, filename, filepath, kb_doc_id, kb_status, uploaded_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [project_id, category, filename, filepath, kb_doc_id, kb_status_json, now],
     )
+    conn.commit()
+    conn.close()
+
+
+def update_file_kb_status(file_id: int, kb_doc_id: str = "", kb_status: dict = None):
+    conn = get_conn()
+    if kb_status is not None:
+        kb_status_json = json.dumps(kb_status, ensure_ascii=False)
+        conn.execute(
+            "UPDATE files SET kb_doc_id = ?, kb_status = ? WHERE id = ?",
+            [kb_doc_id, kb_status_json, file_id],
+        )
+    elif kb_doc_id:
+        conn.execute(
+            "UPDATE files SET kb_doc_id = ? WHERE id = ?",
+            [kb_doc_id, file_id],
+        )
     conn.commit()
     conn.close()
 
