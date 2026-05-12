@@ -201,23 +201,4 @@ render_sidebar(current_project_id, current_project, active_projects)
 # ── 主区域：对话消息 + 报告章节 ──
 render_chat(current_project_id)
 
-# ── 已完成项目 ──
-if completed_projects:
-    st.markdown("---")
-    with st.expander(f"📁 已完成项目 ({len(completed_projects)} 个)", expanded=False):
-        for cp in completed_projects:
-            ei = get_export_info(cp["id"])
-            with st.container(border=True):
-                c1, c2, c3 = st.columns([3, 2, 1])
-                c1.markdown(f"**{cp['name']}**")
-                if cp.get("completed_at"):
-                    c1.caption(f"完成：{cp['completed_at'][:10]}")
-                c2.caption(f"📄 {ei.get('export_filename', '—')}")
-                ep = ei.get("export_path", "")
-                if ep:
-                    try:
-                        with open(ep, "rb") as f:
-                            c3.download_button("📥 下载", data=f, file_name=ei["export_filename"],
-                                               key=f"dl_{cp['id']}", use_container_width=True)
-                    except FileNotFoundError:
-                        c3.caption("已移除")
+
