@@ -10,8 +10,7 @@ except ImportError:
 APP_PASSWORD = os.getenv("APP_PASSWORD", "123456")
 
 ZHIPUAI_API_KEY = os.getenv("ZHIPUAI_API_KEY", "")
-ZHIPUAI_KB_ID = os.getenv("ZHIPUAI_KB_ID", "")
-KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID") or ZHIPUAI_KB_ID or ""
+KNOWLEDGE_BASE_ID = os.getenv("KNOWLEDGE_BASE_ID", "")
 ZHIPUAI_BASE_URL = os.getenv("ZHIPUAI_BASE_URL", "https://open.bigmodel.cn/api/llm")
 ZHIPUAI_KB_BASE_URL = os.getenv("ZHIPUAI_KB_BASE_URL", "https://open.bigmodel.cn/api/llm-application")
 
