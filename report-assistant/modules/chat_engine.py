@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.request
 import urllib.error
 from typing import Optional, Generator
@@ -26,7 +27,14 @@ SYSTEM_PROMPT_BASE = (
 )
 
 
-def _deepseek_stream(api_key: str, base_url: str, messages: list, model: str) -> Generator[str, None, None]:
+def _strip_html_for_api(text: str) -> str:
+    text = re.sub(r'<details[^>]*>.*?</details>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<[^>]+>', '', text)
+    return text.strip()
+
+
+def _deepseek_stream(api_key: str, base_url: str, messages: list, model: str,
+                     thinking: bool = False) -> Generator[dict, None, None]:
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -37,8 +45,11 @@ def _deepseek_stream(api_key: str, base_url: str, messages: list, model: str) ->
         "messages": messages,
         "stream": True,
         "temperature": 0.3,
-        "max_tokens": 4096,
+        "max_tokens": 8192 if thinking else 4096,
     }
+    if thinking:
+        payload["thinking"] = {"type": "enabled"}
+
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     try:
@@ -55,16 +66,19 @@ def _deepseek_stream(api_key: str, base_url: str, messages: list, model: str) ->
                 try:
                     parsed = json.loads(content)
                     delta = parsed.get("choices", [{}])[0].get("delta", {})
-                    text = delta.get("content", "")
-                    if text:
-                        yield text
+                    reasoning = delta.get("reasoning_content", "")
+                    content_text = delta.get("content", "")
+                    if reasoning:
+                        yield {"type": "reasoning", "text": reasoning}
+                    if content_text:
+                        yield {"type": "content", "text": content_text}
                 except json.JSONDecodeError:
                     pass
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace")
-        yield f"\n\n**API错误** (HTTP {e.code}): {error_body}"
+        yield {"type": "error", "text": f"\n\n**API错误** (HTTP {e.code}): {error_body}"}
     except Exception as e:
-        yield f"\n\n**请求失败**: {str(e)}"
+        yield {"type": "error", "text": f"\n\n**请求失败**: {str(e)}"}
 
 
 def _build_context(project_id: int, query: str, mode: str, web_search_enabled: bool) -> dict:
@@ -147,7 +161,8 @@ def _build_messages(project_id: int, query: str, mode: str, web_search_enabled: 
     conversation = get_conversation(project_id)
     recent = conversation[-20:] if len(conversation) > 20 else conversation
     for msg in recent:
-        messages.append({"role": msg["role"], "content": msg["content"]})
+        content = _strip_html_for_api(msg["content"]) if msg["role"] == "assistant" else msg["content"]
+        messages.append({"role": msg["role"], "content": content})
 
     messages.append({"role": "user", "content": query})
 
@@ -177,7 +192,8 @@ def _auto_learn(project_id: int, query: str, response: str):
 
     full_response = ""
     for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-v4-flash"):
-        full_response += chunk
+        if chunk["type"] == "content":
+            full_response += chunk["text"]
 
     if "NONE" in full_response.strip():
         return
@@ -200,10 +216,10 @@ def _auto_learn(project_id: int, query: str, response: str):
         )
 
 
-def chat(project_id: int, query: str, model: str, mode: str, web_search_enabled: bool) -> Generator[str, None, None]:
+def chat(project_id: int, query: str, model: str, mode: str, web_search_enabled: bool) -> Generator[dict, None, None]:
     api_key = DEEPSEEK_API_KEY
     if not api_key:
-        yield "**❌ DEEPSEEK_API_KEY 未配置**\n\n请在 .env 文件中设置 DEEPSEEK_API_KEY。"
+        yield {"type": "error", "text": "**❌ DEEPSEEK_API_KEY 未配置**\n\n请在 .env 文件中设置 DEEPSEEK_API_KEY。"}
         return
 
     deepseek_model = MODEL_MAP.get(model, "deepseek-v4-flash")
@@ -212,11 +228,14 @@ def chat(project_id: int, query: str, model: str, mode: str, web_search_enabled:
 
     full_response = ""
     try:
-        for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, messages, deepseek_model):
-            full_response += chunk
+        for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, messages, deepseek_model, thinking=True):
+            if chunk["type"] == "content":
+                full_response += chunk["text"]
+            elif chunk["type"] == "error":
+                full_response += chunk["text"]
             yield chunk
     except Exception as e:
-        yield f"\n\n**生成失败**: {str(e)}"
+        yield {"type": "error", "text": f"\n\n**生成失败**: {str(e)}"}
         return
 
     try:
@@ -257,7 +276,8 @@ def extract_sections(project_id: int, query: Optional[str] = None) -> list:
 
     full_response = ""
     for chunk in _deepseek_stream(api_key, DEEPSEEK_BASE_URL, msgs, "deepseek-v4-flash"):
-        full_response += chunk
+        if chunk["type"] == "content":
+            full_response += chunk["text"]
 
     try:
         sections = json.loads(full_response.strip())

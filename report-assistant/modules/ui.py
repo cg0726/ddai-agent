@@ -1,4 +1,5 @@
 import json
+import html
 import streamlit as st
 from pathlib import Path
 from modules.config import UPLOAD_CATEGORIES, UPLOAD_DIR, UPLOAD_MAX_SIZE
@@ -6,7 +7,7 @@ from modules.project import (
     add_file, get_files, update_file_kb_status,
     add_memory, update_memory, delete_memory, get_memories,
     MEMORY_TYPES, MEMORY_TYPE_LABELS,
-    get_messages, add_message, get_project_config,
+    get_messages, add_message, get_project_config, get_conversation,
     update_project_config, get_sections, confirm_section,
     get_current_section, get_section_progress, update_section,
 )
@@ -26,21 +27,87 @@ def format_search_results(search_result: dict) -> str:
         return ""
     lines = ["**🔍 联网搜索结果**\n"]
     for i, item in enumerate(search_result["results"], 1):
-        weight_info = item["weight_label"]
-        recency = item.get("recency", "未知")
-        content = item.get("extracted", item.get("snippet", "无摘要"))
         lines.append(
             f"> **[{i}] {item['title']}**  \n"
-            f"> 来源：{item['source']} | 时效：{recency} | 权重：{weight_info}  \n"
-            f"> {content}\n"
+            f"> 来源：{item['source']} | 时效：{item.get('recency', '?')} | 权重：{item['weight_label']}  \n"
+            f"> {item.get('extracted', item.get('snippet', ''))}\n"
         )
-    lines.append(f"\n*共 {search_result['total_count']} 条结果*\n")
+    lines.append(f"\n*共 {search_result['total_count']} 条*\n")
     return "\n".join(lines)
 
 
-def render_sidebar(project_id: int):
+def render_sidebar(project_id: int, current_project: dict, active_projects: list):
     with st.sidebar:
-        st.markdown("### 📂 文件上传")
+        # ── 项目管理层 ──
+        st.markdown(f"#### 📋 {current_project['name']}")
+
+        project_names = {p["id"]: p["name"] for p in active_projects}
+        sel_id = st.selectbox(
+            "切换项目",
+            options=list(project_names.keys()),
+            format_func=lambda x: project_names[x],
+            index=list(project_names.keys()).index(project_id) if project_id in project_names else 0,
+            key="sidebar_project_selector",
+            label_visibility="collapsed",
+        )
+        if sel_id != project_id:
+            st.session_state.current_project_id = sel_id
+            del_convo_cache = [k for k in st.session_state.keys() if k.startswith("convo_loaded_")]
+            for k in del_convo_cache:
+                del st.session_state[k]
+            st.rerun()
+
+        cb1, cb2, cb3 = st.columns(3)
+        if cb1.button("➕ 新建", use_container_width=True):
+            st.session_state.show_new_project = True
+            st.rerun()
+        if cb2.button("📄 导出", use_container_width=True):
+            st.session_state.show_export = True
+            st.rerun()
+        if cb3.button("✔️ 完成", use_container_width=True, type="primary"):
+            st.session_state.show_complete_confirm = True
+            st.rerun()
+
+        st.markdown("---")
+
+        # ── AI 控制层 ──
+        config = get_project_config(project_id)
+        cm1, cm2, cm3 = st.columns([1, 1, 1])
+        with cm1:
+            model = st.selectbox("模型", ["Flash", "Pro"],
+                                 index=0 if config["model"] == "Flash" else 1,
+                                 key=f"sidebar_model_{project_id}", label_visibility="collapsed")
+        with cm2:
+            new_mode = st.selectbox("模式", ["问答", "报告"],
+                                    index=0 if config["mode"] == "问答" else 1,
+                                    key=f"sidebar_mode_{project_id}", label_visibility="collapsed")
+        with cm3:
+            ws_val = config["web_search"]
+            st.markdown(f'<div class="{"web-search-active" if ws_val else "web-search-inactive"}">',
+                        unsafe_allow_html=True)
+            web_search = st.checkbox("联网搜索", value=ws_val, key=f"sidebar_web_{project_id}")
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        if new_mode != config["mode"]:
+            update_project_config(project_id, mode=new_mode)
+            if new_mode == "报告":
+                sections = get_sections(project_id)
+                if not sections:
+                    with st.spinner("正在提取章节..."):
+                        extract_sections(project_id)
+                ts = check_template_status(project_id)
+                if ts["message"]:
+                    (st.info if ts["has_previous"] else st.warning)(f"ℹ️ {ts['message']}")
+            st.rerun()
+        if model != config["model"]:
+            update_project_config(project_id, model=model)
+        if web_search != config["web_search"]:
+            update_project_config(project_id, web_search=int(web_search))
+
+        st.markdown("---")
+
+        # ── 文件上传 ──
+        st.markdown("#### 📂 文件上传")
         for label, cat_key in UPLOAD_CATEGORIES.items():
             with st.expander(label, expanded=False):
                 uploaded_file = st.file_uploader(
@@ -49,321 +116,287 @@ def render_sidebar(project_id: int):
                     label_visibility="collapsed",
                 )
                 if uploaded_file is not None:
-                    upload_state_key = f"upload_state_{project_id}_{cat_key}"
-                    if upload_state_key not in st.session_state:
-                        st.session_state[upload_state_key] = None
-                    if st.session_state[upload_state_key] is None:
+                    usk = f"upload_state_{project_id}_{cat_key}"
+                    if usk not in st.session_state:
+                        st.session_state[usk] = None
+                    if st.session_state[usk] is None:
                         if uploaded_file.size > UPLOAD_MAX_SIZE:
-                            st.error("文件大小超过10MB限制，请重新选择")
+                            st.error("文件超过10MB限制")
                         else:
-                            status_placeholder = st.empty()
-                            status_placeholder.info("⏳ 正在上传并解析...")
-                            project_dir = UPLOAD_DIR / str(project_id) / cat_key
-                            project_dir.mkdir(parents=True, exist_ok=True)
-                            file_path = project_dir / uploaded_file.name
-                            with open(file_path, "wb") as f:
+                            sp = st.empty()
+                            sp.info("⏳ 正在上传并解析...")
+                            pd = UPLOAD_DIR / str(project_id) / cat_key
+                            pd.mkdir(parents=True, exist_ok=True)
+                            fp = pd / uploaded_file.name
+                            with open(fp, "wb") as f:
                                 f.write(uploaded_file.getbuffer())
-
-                            category_label = CATEGORY_LABEL_MAP.get(cat_key, "other")
-                            kb_result = upload_to_knowledge(str(file_path), category_label, project_id)
-
-                            if kb_result["success"]:
-                                kb_status = kb_result.get("kb_status", {})
-                                add_file(project_id, cat_key, uploaded_file.name, str(file_path),
-                                         kb_doc_id=kb_status.get("doc_id", ""),
-                                         kb_status=kb_status)
-                                if kb_status.get("status") == "completed":
-                                    status_placeholder.success(f"✅ {uploaded_file.name} 已入库 — 向量化完成")
-                                elif kb_status.get("status") == "failed":
-                                    status_placeholder.warning(f"⚠️ {uploaded_file.name} 上传成功，但向量化失败: {kb_status.get('fail_reason', '未知')}")
+                            cl = CATEGORY_LABEL_MAP.get(cat_key, "other")
+                            kr = upload_to_knowledge(str(fp), cl, project_id)
+                            if kr["success"]:
+                                ks = kr.get("kb_status", {})
+                                add_file(project_id, cat_key, uploaded_file.name, str(fp),
+                                         kb_doc_id=ks.get("doc_id", ""), kb_status=ks)
+                                if ks.get("status") == "completed":
+                                    sp.success(f"✅ {uploaded_file.name}")
+                                elif ks.get("status") == "failed":
+                                    sp.warning(f"⚠️ {uploaded_file.name} 向量化失败: {ks.get('fail_reason', '?')}")
                                 else:
-                                    status_placeholder.success(f"✅ {uploaded_file.name} 已入库 — {kb_status.get('status_text', '向量化处理中')}")
-                                st.session_state[upload_state_key] = "success"
+                                    sp.success(f"✅ {uploaded_file.name} — {ks.get('status_text', '处理中')}")
+                                st.session_state[usk] = "success"
                             else:
-                                status_placeholder.error(f"❌ {uploaded_file.name} 入库失败: {kb_result['error']}")
-                                st.session_state[upload_state_key] = "error"
+                                sp.error(f"❌ {kr['error']}")
+                                st.session_state[usk] = "error"
                             st.rerun()
                 existing = [f for f in get_files(project_id) if f["category"] == cat_key]
-                if existing:
-                    for f in existing:
-                        kb_status_raw = f.get("kb_status", "")
-                        kb_doc_id = f.get("kb_doc_id", "")
-                        try:
-                            kb_status = json.loads(kb_status_raw) if isinstance(kb_status_raw, str) and kb_status_raw else {}
-                        except (json.JSONDecodeError, TypeError):
-                            kb_status = {}
+                for f in existing:
+                    ksr = f.get("kb_status", "")
+                    kdi = f.get("kb_doc_id", "")
+                    try:
+                        ks = json.loads(ksr) if isinstance(ksr, str) and ksr else {}
+                    except (json.JSONDecodeError, TypeError):
+                        ks = {}
+                    if kdi and ks.get("status") not in ("completed", "failed"):
+                        fresh = get_embedding_status(kdi)
+                        if fresh["success"]:
+                            ks = fresh
+                            update_file_kb_status(f["id"], kb_doc_id=kdi, kb_status=fresh)
+                    ss = ""
+                    if ks.get("status") == "completed":
+                        ss = "✅"
+                    elif ks.get("status") == "failed":
+                        ss = "❌"
+                    elif kdi:
+                        ss = "⏳"
+                    st.caption(f"{ss} {f['filename']}")
+                    if ks.get("status") == "failed" and kdi:
+                        if st.button("🔄 重新向量化", key=f"reembed_{f['id']}"):
+                            with st.spinner("..."):
+                                reembed_document(kdi)
+                                update_file_kb_status(f["id"], kb_doc_id=kdi, kb_status=get_embedding_status(kdi))
+                            st.rerun()
+                    elif ks.get("status") not in ("completed", "failed") and kdi:
+                        if st.button("🔄 刷新", key=f"refresh_emb_{f['id']}"):
+                            st.rerun()
 
-                        if kb_doc_id and kb_status.get("status") not in ("completed", "failed"):
-                            fresh = get_embedding_status(kb_doc_id)
-                            if fresh["success"]:
-                                kb_status = fresh
-                                update_file_kb_status(f["id"], kb_doc_id=kb_doc_id, kb_status=fresh)
-
-                        status_str = ""
-                        if kb_status.get("status") == "completed":
-                            status_str = "✅"
-                        elif kb_status.get("status") == "failed":
-                            status_str = "❌"
-                        elif kb_doc_id:
-                            status_str = "⏳"
-                        st.caption(f"{status_str} {f['filename']}")
-
-                        if kb_status.get("status") == "failed" and kb_doc_id:
-                            if st.button("🔄 重新向量化", key=f"reembed_{f['id']}"):
-                                with st.spinner("重新向量化..."):
-                                    reembed_document(kb_doc_id)
-                                    new_emb = get_embedding_status(kb_doc_id)
-                                    update_file_kb_status(f["id"], kb_doc_id=kb_doc_id, kb_status=new_emb)
-                                st.rerun()
-                        elif kb_status.get("status") not in ("completed", "failed") and kb_doc_id:
-                            if st.button("🔄 刷新状态", key=f"refresh_emb_{f['id']}"):
-                                st.rerun()
         st.markdown("---")
-        render_memory_panel(project_id)
-    return get_files(project_id)
+        _memory_panel(project_id)
 
 
-def render_memory_panel(project_id: int):
-    st.markdown("### 🧠 记忆管理")
-    tab1, tab2 = st.tabs(["记忆列表", "新增记忆"])
-    with tab2:
-        with st.form(key=f"new_memory_form_{project_id}", clear_on_submit=True):
-            mtype = st.selectbox("类型", options=MEMORY_TYPES,
-                                 format_func=lambda x: MEMORY_TYPE_LABELS.get(x, x),
-                                 key=f"mem_type_{project_id}")
-            keywords = st.text_input("关键词", placeholder="逗号分隔，如：风格,语气", key=f"mem_kw_{project_id}")
-            content = st.text_area("内容", height=100, placeholder="输入记忆内容...", key=f"mem_ct_{project_id}")
-            if st.form_submit_button("保存记忆", use_container_width=True):
-                if content.strip():
-                    add_memory(mtype, keywords.strip(), content.strip())
-                    st.success("记忆已保存")
+def _memory_panel(project_id: int):
+    st.markdown("#### 🧠 记忆管理")
+    t1, t2 = st.tabs(["列表", "新增"])
+    with t2:
+        with st.form(key=f"mf_{project_id}", clear_on_submit=True):
+            mt = st.selectbox("类型", options=MEMORY_TYPES,
+                              format_func=lambda x: MEMORY_TYPE_LABELS.get(x, x), key=f"mt_{project_id}")
+            kw = st.text_input("关键词", placeholder="逗号分隔", key=f"mkw_{project_id}")
+            ct = st.text_area("内容", height=60, placeholder="输入记忆内容...", key=f"mc_{project_id}")
+            if st.form_submit_button("保存", use_container_width=True):
+                if ct.strip():
+                    add_memory(mt, kw.strip(), ct.strip())
+                    st.success("已保存")
                     st.rerun()
-    with tab1:
-        col_s1, col_s2 = st.columns([1, 1])
-        with col_s1:
-            filter_type = st.selectbox("筛选类型", options=["全部"] + MEMORY_TYPES,
-                                       format_func=lambda x: MEMORY_TYPE_LABELS.get(x, "全部") if x != "全部" else "全部",
-                                       key=f"mem_filter_{project_id}", label_visibility="collapsed")
-        with col_s2:
-            search_q = st.text_input("🔍", placeholder="搜索记忆...", key=f"search_memory_{project_id}", label_visibility="collapsed")
-        mtype_filter = filter_type if filter_type != "全部" else None
-        search_str = search_q if search_q else None
-        memories = get_memories(mtype=mtype_filter, search=search_str)
-        if not memories:
-            st.caption("暂无记忆条目")
-        for mem in memories:
+    with t1:
+        cs1, cs2 = st.columns([1, 1])
+        with cs1:
+            ft = st.selectbox("类型", options=["全部"] + MEMORY_TYPES,
+                              format_func=lambda x: MEMORY_TYPE_LABELS.get(x, "全部") if x != "全部" else "全部",
+                              key=f"mfilt_{project_id}", label_visibility="collapsed")
+        with cs2:
+            sq = st.text_input("🔍", placeholder="搜索...", key=f"ms_{project_id}", label_visibility="collapsed")
+        mf = ft if ft != "全部" else None
+        ss = sq if sq else None
+        mems = get_memories(mtype=mf, search=ss)
+        if not mems:
+            st.caption("暂无")
+        for mem in mems:
             with st.container(border=True):
-                type_label = MEMORY_TYPE_LABELS.get(mem["type"], mem["type"])
-                edit_key = f"edit_mem_{mem['id']}"
-                if st.session_state.get(edit_key, False):
-                    new_type = st.selectbox("类型", options=MEMORY_TYPES,
-                                            format_func=lambda x: MEMORY_TYPE_LABELS.get(x, x),
-                                            index=MEMORY_TYPES.index(mem["type"]) if mem["type"] in MEMORY_TYPES else 0,
-                                            key=f"mem_edit_type_{mem['id']}")
-                    new_kw = st.text_input("关键词", value=mem["keywords"], key=f"mem_edit_kw_{mem['id']}")
-                    new_val = st.text_area("内容", value=mem["content"], key=f"mem_input_{mem['id']}", height=80, label_visibility="collapsed")
+                tl = MEMORY_TYPE_LABELS.get(mem["type"], mem["type"])
+                ek = f"em_{mem['id']}"
+                if st.session_state.get(ek):
+                    nt = st.selectbox("类型", options=MEMORY_TYPES,
+                                      format_func=lambda x: MEMORY_TYPE_LABELS.get(x, x),
+                                      index=MEMORY_TYPES.index(mem["type"]) if mem["type"] in MEMORY_TYPES else 0,
+                                      key=f"met_{mem['id']}")
+                    nk = st.text_input("关键词", value=mem["keywords"], key=f"mek_{mem['id']}")
+                    nv = st.text_area("内容", value=mem["content"], height=60, key=f"mev_{mem['id']}", label_visibility="collapsed")
                     c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("保存", key=f"mem_save_{mem['id']}", use_container_width=True):
-                            update_memory(mem["id"], new_type, new_kw, new_val)
-                            st.session_state[edit_key] = False
-                            st.rerun()
-                    with c2:
-                        if st.button("取消", key=f"mem_cancel_{mem['id']}", use_container_width=True):
-                            st.session_state[edit_key] = False
-                            st.rerun()
+                    if c1.button("保存", key=f"msv_{mem['id']}", use_container_width=True):
+                        update_memory(mem["id"], nt, nk, nv)
+                        st.session_state[ek] = False
+                        st.rerun()
+                    if c2.button("取消", key=f"mcl_{mem['id']}", use_container_width=True):
+                        st.session_state[ek] = False
+                        st.rerun()
                 else:
-                    st.caption(f"[{type_label}] {mem['keywords']} — {mem['content'][:80]}{'...' if len(mem['content']) > 80 else ''}")
+                    st.caption(f"[{tl}] {mem['keywords']} — {mem['content'][:60]}{'...' if len(mem['content']) > 60 else ''}")
                     c1, c2 = st.columns(2)
-                    with c1:
-                        if st.button("编辑", key=f"mem_edit_{mem['id']}", use_container_width=True):
-                            st.session_state[edit_key] = True
-                            st.rerun()
-                    with c2:
-                        if st.button("删除", key=f"mem_del_{mem['id']}", use_container_width=True):
-                            delete_memory(mem["id"])
-                            st.rerun()
+                    if c1.button("编辑", key=f"med_{mem['id']}", use_container_width=True):
+                        st.session_state[ek] = True
+                        st.rerun()
+                    if c2.button("删除", key=f"mdl_{mem['id']}", use_container_width=True):
+                        delete_memory(mem["id"])
+                        st.rerun()
 
 
-def render_chat(project_id: int, fixed_bottom: bool = False):
-    """Render chat messages and report mode section (scrollable area)."""
+def _build_streaming_display(reasoning: str, content: str, final: bool = False) -> str:
+    cursor = "" if final else "▌"
+    if reasoning:
+        escaped_reasoning = html.escape(reasoning)
+        return (
+            '<details open><summary>🧠 思考过程</summary>\n\n'
+            '<div style="max-height:400px;overflow-y:auto;background:#f8f9fa;'
+            'border-radius:6px;padding:8px 12px;font-size:11px;'
+            'white-space:pre-wrap;word-break:break-word;color:#555;">\n'
+            f'{escaped_reasoning}\n'
+            '</div>\n'
+            '</details>\n\n'
+            f'{content}{cursor}'
+        )
+    return f'{content}{cursor}'
+
+
+def render_chat(project_id: int):
     config = get_project_config(project_id)
     current_mode = config["mode"]
 
-    # ── 报告模式：章节进度与生成（在滚动区域中） ──
+    # ── 报告模式 ──
     if current_mode == "报告":
         sections = get_sections(project_id)
         if not sections:
             sections = extract_sections(project_id)
-
         progress = get_section_progress(project_id)
-        st.markdown(f"**📊 报告进度**: {progress['confirmed']}/{progress['total']} 章已完成")
         if progress["total"] > 0:
-            st.progress(progress["confirmed"] / progress["total"])
+            st.progress(progress["confirmed"] / progress["total"], text=f"📊 {progress['confirmed']}/{progress['total']} 章")
 
         current = get_current_section(project_id)
         if current is None and progress["confirmed"] > 0:
-            st.success("🎉 **所有章节已完成！** 请导出文档。")
+            st.success("🎉 所有章节已完成！请导出文档。")
         elif current is not None:
             idx = current["_index"]
-            result_key = f"sec_result_{project_id}_{idx}"
-
-            with st.expander(f"📄 当前章节：{current['title']}", expanded=True):
+            rk = f"sec_result_{project_id}_{idx}"
+            with st.expander(f"📄 {current['title']}", expanded=True):
                 st.caption(current.get("description", ""))
-                if result_key not in st.session_state:
-                    st.session_state[result_key] = None
-
-                if st.session_state[result_key] is None:
-                    if st.button(f"🚀 生成「{current['title']}」", key=f"gen_btn_{project_id}_{idx}",
+                if rk not in st.session_state:
+                    st.session_state[rk] = None
+                if st.session_state[rk] is None:
+                    if st.button(f"🚀 生成「{current['title']}」", key=f"gen_{project_id}_{idx}",
                                  use_container_width=True, type="primary"):
                         with st.chat_message("assistant"):
-                            placeholder = st.empty()
-                            placeholder.info("⏳ 正在生成，请稍候...")
-                            full = ""
-                            prompt = f"请撰写尽责调查报告的「{current['title']}」章节。{current.get('description', '')}"
-                            for chunk in chat(project_id, prompt, config["model"], current_mode, config["web_search"]):
-                                full += chunk
-                                placeholder.markdown(full + "▌")
-                            placeholder.markdown(full)
-                            st.session_state[result_key] = full
+                            ph = st.empty()
+                            ph.info("⏳ 正在生成...")
+                            full_reasoning = ""
+                            full_content = ""
+                            for chunk in chat(project_id,
+                                              f"请撰写「{current['title']}」章节。{current.get('description', '')}",
+                                              config["model"], current_mode, config["web_search"]):
+                                if chunk["type"] == "reasoning":
+                                    full_reasoning += chunk["text"]
+                                elif chunk["type"] == "content":
+                                    full_content += chunk["text"]
+                                elif chunk["type"] == "error":
+                                    full_content += chunk["text"]
+                                ph.markdown(
+                                    _build_streaming_display(full_reasoning, full_content),
+                                    unsafe_allow_html=True,
+                                )
+                            ph.markdown(
+                                _build_streaming_display(full_reasoning, full_content, final=True),
+                                unsafe_allow_html=True,
+                            )
+                            st.session_state[rk] = full_content
                         st.rerun()
                 else:
-                    st.markdown(st.session_state[result_key])
-                    c_a, c_b, c_c = st.columns(3)
-                    with c_a:
-                        if st.button("✅ 接受", key=f"accept_{project_id}_{idx}", use_container_width=True, type="primary"):
-                            content = st.session_state[result_key]
-                            confirm_section(project_id, idx, content)
-                            st.session_state[result_key] = None
-                            add_message(project_id, "assistant",
-                                        f"**📄 {current['title']}**\n\n{content}",
-                                        sources=[{"source": "AI生成", "section": current["title"]}])
+                    st.markdown(st.session_state[rk])
+                    ca, cb, cc = st.columns(3)
+                    if ca.button("✅ 接受", key=f"acc_{project_id}_{idx}", use_container_width=True, type="primary"):
+                        content = st.session_state[rk]
+                        confirm_section(project_id, idx, content)
+                        st.session_state[rk] = None
+                        add_message(project_id, "assistant", f"**📄 {current['title']}**\n\n{content}",
+                                    sources=[{"source": "AI生成", "section": current["title"]}])
+                        st.rerun()
+                    ek = f"edit_mode_{project_id}_{idx}"
+                    if not st.session_state.get(ek):
+                        if cb.button("✏️ 编辑", key=f"ed_{project_id}_{idx}", use_container_width=True):
+                            st.session_state[ek] = True
                             st.rerun()
-                    with c_b:
-                        edit_key = f"edit_mode_{project_id}_{idx}"
-                        if not st.session_state.get(edit_key):
-                            if st.button("✏️ 编辑", key=f"edit_{project_id}_{idx}", use_container_width=True):
-                                st.session_state[edit_key] = True
-                                st.rerun()
-                    with c_c:
-                        rewrite_key = f"rewrite_input_{project_id}_{idx}"
-                        if not st.session_state.get(rewrite_key):
-                            if st.button("🔄 重写", key=f"rewrite_{project_id}_{idx}", use_container_width=True):
-                                st.session_state[rewrite_key] = True
-                                st.rerun()
-
-                    edit_key = f"edit_mode_{project_id}_{idx}"
-                    if st.session_state.get(edit_key):
-                        edited = st.text_area("编辑内容", value=st.session_state[result_key],
-                                              height=200, key=f"editor_{project_id}_{idx}")
+                    rwk = f"rw_{project_id}_{idx}"
+                    if not st.session_state.get(rwk):
+                        if cc.button("🔄 重写", key=f"rwb_{project_id}_{idx}", use_container_width=True):
+                            st.session_state[rwk] = True
+                            st.rerun()
+                    if st.session_state.get(ek):
+                        edited = st.text_area("编辑", value=st.session_state[rk], height=150, key=f"editor_{project_id}_{idx}")
                         ec1, ec2 = st.columns(2)
-                        with ec1:
-                            if st.button("💾 保存修改", key=f"save_edit_{project_id}_{idx}",
-                                         use_container_width=True, type="primary"):
-                                confirm_section(project_id, idx, edited)
-                                st.session_state[result_key] = None
-                                st.session_state[edit_key] = False
-                                add_message(project_id, "assistant",
-                                            f"**📄 {current['title']}**\n\n{edited}",
-                                            sources=[{"source": "AI生成+人工编辑", "section": current["title"]}])
-                                st.rerun()
-                        with ec2:
-                            if st.button("取消", key=f"cancel_edit_{project_id}_{idx}", use_container_width=True):
-                                st.session_state[edit_key] = False
-                                st.rerun()
-
-                    rewrite_key = f"rewrite_input_{project_id}_{idx}"
-                    if st.session_state.get(rewrite_key):
-                        feedback = st.text_area("重写意见", placeholder="请说明需要修改的方向...",
-                                                key=f"feedback_{project_id}_{idx}", height=80)
+                        if ec1.button("💾 保存", key=f"sv_{project_id}_{idx}", use_container_width=True, type="primary"):
+                            confirm_section(project_id, idx, edited)
+                            st.session_state[rk] = None
+                            st.session_state[ek] = False
+                            add_message(project_id, "assistant", f"**📄 {current['title']}**\n\n{edited}",
+                                        sources=[{"source": "AI+编辑", "section": current["title"]}])
+                            st.rerun()
+                        if ec2.button("取消", key=f"cce_{project_id}_{idx}", use_container_width=True):
+                            st.session_state[ek] = False
+                            st.rerun()
+                    if st.session_state.get(rwk):
+                        fb = st.text_area("重写意见", placeholder="说明修改方向...", height=60, key=f"fb_{project_id}_{idx}")
                         rc1, rc2 = st.columns(2)
-                        with rc1:
-                            if st.button("🔄 重新生成", key=f"do_rewrite_{project_id}_{idx}",
-                                         use_container_width=True, type="primary"):
-                                st.session_state[result_key] = None
-                                st.session_state[rewrite_key] = False
-                                st.rerun()
-                        with rc2:
-                            if st.button("取消", key=f"cancel_rewrite_{project_id}_{idx}",
-                                         use_container_width=True):
-                                st.session_state[rewrite_key] = False
-                                st.rerun()
+                        if rc1.button("🔄 重新生成", key=f"drw_{project_id}_{idx}", use_container_width=True, type="primary"):
+                            st.session_state[rk] = None
+                            st.session_state[rwk] = False
+                            st.rerun()
+                        if rc2.button("取消", key=f"ccr_{project_id}_{idx}", use_container_width=True):
+                            st.session_state[rwk] = False
+                            st.rerun()
 
     # ── 对话历史 ──
+    convo_cache = f"convo_loaded_{project_id}"
+    if convo_cache not in st.session_state:
+        get_conversation(project_id)
+        st.session_state[convo_cache] = True
+
     messages = get_messages(project_id)
     for msg in messages:
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            if msg["role"] == "assistant":
+                st.markdown(msg["content"], unsafe_allow_html=True)
+            else:
+                st.markdown(msg["content"])
 
-
-def render_chat_bottom(project_id: int):
-    """Render fixed bottom bar with model/mode controls and chat input."""
-    config = get_project_config(project_id)
-
-    col_b1, col_b2, col_b3 = st.columns([1, 1, 1])
-    with col_b1:
-        model = st.selectbox("模型", ["Flash", "Pro"],
-                             index=0 if config["model"] == "Flash" else 1,
-                             key=f"model_bottom_{project_id}", label_visibility="collapsed")
-    with col_b2:
-        new_mode = st.selectbox("模式", ["问答", "报告"],
-                                index=0 if config["mode"] == "问答" else 1,
-                                key=f"mode_bottom_{project_id}", label_visibility="collapsed")
-    with col_b3:
-        web_search_val = config["web_search"]
-        web_class = "web-search-active" if web_search_val else "web-search-inactive"
-        st.markdown(f'<div class="{web_class}">', unsafe_allow_html=True)
-        web_search = st.checkbox("联网搜索", value=web_search_val,
-                                 key=f"web_bottom_{project_id}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    mode_changed = new_mode != config["mode"]
-    if mode_changed:
-        update_project_config(project_id, mode=new_mode)
-        if new_mode == "报告":
-            sections = get_sections(project_id)
-            if not sections:
-                with st.spinner("正在提取报告章节结构..."):
-                    extract_sections(project_id)
-            template_status = check_template_status(project_id)
-            if template_status["message"]:
-                if template_status["has_previous"]:
-                    st.info(f"ℹ️ {template_status['message']}")
-                else:
-                    st.warning(f"⚠️ {template_status['message']}")
-        st.rerun()
-
-    if model != config["model"]:
-        update_project_config(project_id, model=model)
-    if web_search != config["web_search"]:
-        update_project_config(project_id, web_search=int(web_search))
-
-    current_mode = new_mode
-    prompt = st.chat_input("请输入您的问题..." if current_mode != "报告" else "请输入对该章节的补充要求...",
-                           key=f"chat_input_{project_id}")
+    # ── 输入框 ──
+    cfg = get_project_config(project_id)
+    prompt = st.chat_input("请输入问题..." if cfg["mode"] != "报告" else "章节补充要求...", key=f"ci_{project_id}")
     if prompt:
         cfg = get_project_config(project_id)
         add_message(project_id, "user", prompt)
         st.chat_message("user").markdown(prompt)
         with st.chat_message("assistant"):
-            placeholder = st.empty()
-            placeholder.info("⏳ 正在生成回答...")
-            sources_list = []
-            full_response = ""
+            ph = st.empty()
+            ph.info("⏳ 正在生成...")
+            sl = []
+            full_reasoning = ""
+            full_content = ""
             for chunk in chat(project_id, prompt, cfg["model"], cfg["mode"], cfg["web_search"]):
-                full_response += chunk
-                placeholder.markdown(full_response + "▌")
-            placeholder.markdown(full_response)
+                if chunk["type"] == "reasoning":
+                    full_reasoning += chunk["text"]
+                elif chunk["type"] == "content":
+                    full_content += chunk["text"]
+                elif chunk["type"] == "error":
+                    full_content += chunk["text"]
+                ph.markdown(
+                    _build_streaming_display(full_reasoning, full_content),
+                    unsafe_allow_html=True,
+                )
+            ph.markdown(
+                _build_streaming_display(full_reasoning, full_content, final=True),
+                unsafe_allow_html=True,
+            )
+            full_display = _build_streaming_display(full_reasoning, full_content, final=True)
             if cfg["web_search"]:
-                search_result = search_and_format(prompt, use_extract=False)
-                if search_result["success"]:
-                    for item in search_result.get("results", []):
-                        sources_list.append({
-                            "title": item["title"],
-                            "source": item["source"],
-                            "weight": item["weight"],
-                            "url": item["url"],
-                        })
-            add_message(project_id, "assistant", full_response,
-                        sources=sources_list if sources_list else None)
+                sr = search_and_format(prompt, use_extract=False)
+                if sr["success"]:
+                    for it in sr.get("results", []):
+                        sl.append({"title": it["title"], "source": it["source"], "weight": it["weight"], "url": it["url"]})
+            add_message(project_id, "assistant", full_display, sources=sl if sl else None)
         st.rerun()
