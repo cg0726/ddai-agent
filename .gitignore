@@ -219,6 +219,7 @@ __marimo__/
 
 # Project data
 data/projects.db
+data/login_attempts.json
 data/uploads/*
 data/exports/*
 !data/.gitkeep
