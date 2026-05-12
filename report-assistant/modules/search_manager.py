@@ -10,7 +10,7 @@ from modules.config import (
     EXTRACT_MODEL,
     EXTRACT_API_KEY,
     EXTRACT_BASE_URL,
-    ZHIPUAI_API_KEY,
+    DEEPSEEK_API_KEY,
 )
 
 
@@ -81,9 +81,9 @@ def _clean_html(text: str) -> str:
 
 
 def _call_extract_model(url: str) -> Optional[str]:
-    api_key = EXTRACT_API_KEY or ZHIPUAI_API_KEY
-    model = EXTRACT_MODEL or "GLM-4-Flash"
-    base_url = EXTRACT_BASE_URL or "https://open.bigmodel.cn/api/llm"
+    api_key = EXTRACT_API_KEY or DEEPSEEK_API_KEY
+    model = EXTRACT_MODEL or "deepseek-v4-flash"
+    base_url = EXTRACT_BASE_URL or "https://api.deepseek.com"
 
     if not api_key:
         return None

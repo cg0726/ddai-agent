@@ -46,10 +46,6 @@ div[data-testid="stDecoration"] { display: none !important; }
 }
 
 section[data-testid="stSidebar"] { font-size: 12px !important; }
-section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span { font-size: 12px !important; }
-section[data-testid="stSidebar"] .stSelectbox label { font-size: 11px !important; }
-section[data-testid="stSidebar"] .stCheckbox label { font-size: 12px !important; }
-section[data-testid="stSidebar"] .stButton button { font-size: 11px !important; padding: 1px 5px !important; }
 section[data-testid="stSidebar"] .stTextInput input { font-size: 12px !important; }
 section[data-testid="stSidebar"] .stTextArea textarea { font-size: 12px !important; }
 section[data-testid="stSidebar"] .stTabs button { font-size: 11px !important; }
@@ -57,6 +53,52 @@ section[data-testid="stSidebar"] h3 { font-size: 13px !important; margin-top: 6p
 
 section[data-testid="stSidebar"] .stExpander { margin-bottom: 2px !important; }
 section[data-testid="stSidebar"] .stExpander > div > div > div { font-size: 11px !important; padding: 4px 6px !important; }
+
+/* ── 侧边栏操作行（新建/导出/完成 + 模型/模式/联网）统一样式 ── */
+section[data-testid="stSidebar"] div.row-widget.stColumns {
+    gap: 4px !important;
+    margin-bottom: 4px !important;
+}
+
+section[data-testid="stSidebar"] .stButton button {
+    height: 32px !important;
+    font-size: 11px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    border-radius: 6px !important;
+    padding: 0 8px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+section[data-testid="stSidebar"] .stSelectbox label {
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+section[data-testid="stSidebar"] .stSelectbox > div {
+    min-height: 32px !important;
+}
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] > div {
+    height: 32px !important;
+    min-height: 32px !important;
+    border-radius: 6px !important;
+}
+section[data-testid="stSidebar"] .stSelectbox div[data-baseweb="select"] span {
+    line-height: 30px !important;
+    font-size: 12px !important;
+}
+
+section[data-testid="stSidebar"] hr {
+    margin-top: 2px !important;
+    margin-bottom: 6px !important;
+    border-color: #e5e7eb !important;
+    opacity: 0.6 !important;
+}
 
 div[data-testid="stChatInput"] {
     border: 1px solid #d0d0d0;
@@ -67,13 +109,19 @@ div[data-testid="stChatInput"] textarea { font-size: 12px !important; }
 .stChatMessage { padding: 4px 8px !important; }
 .stChatMessage p { font-size: 12px !important; margin-bottom: 2px !important; }
 
-.web-search-active label span[data-testid="check"] svg { fill: #22c55e !important; }
-.web-search-inactive label span[data-testid="check"] svg { fill: #9ca3af !important; }
+section[data-testid="stSidebar"] button[kind="primary"] {
+    background-color: #22c55e !important;
+    border-color: #22c55e !important;
+    color: white !important;
+}
+section[data-testid="stSidebar"] button[kind="primary"]:hover {
+    background-color: #16a34a !important;
+    border-color: #16a34a !important;
+}
 
 .stSelectbox div[data-baseweb="select"] span { font-size: 12px !important; }
 .stSelectbox small { font-size: 10px !important; }
 .stSelectbox label { font-size: 11px !important; }
-.stCheckbox label { font-size: 12px !important; }
 .stTabs button { font-size: 12px !important; }
 .stException { font-size: 11px !important; }
 .stTextInput input { font-size: 12px !important; }

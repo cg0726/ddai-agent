@@ -83,10 +83,11 @@ def render_sidebar(project_id: int, current_project: dict, active_projects: list
                                     key=f"sidebar_mode_{project_id}", label_visibility="collapsed")
         with cm3:
             ws_val = config["web_search"]
-            st.markdown(f'<div class="{"web-search-active" if ws_val else "web-search-inactive"}">',
-                        unsafe_allow_html=True)
-            web_search = st.checkbox("联网搜索", value=ws_val, key=f"sidebar_web_{project_id}")
-            st.markdown('</div>', unsafe_allow_html=True)
+            label = "🌐 联网ON" if ws_val else "🌐 联网OFF"
+            if st.button(label, key=f"sb_web_{project_id}", use_container_width=True,
+                         type="primary" if ws_val else "secondary"):
+                update_project_config(project_id, web_search=int(not ws_val))
+                st.rerun()
 
         if new_mode != config["mode"]:
             update_project_config(project_id, mode=new_mode)
@@ -101,8 +102,6 @@ def render_sidebar(project_id: int, current_project: dict, active_projects: list
             st.rerun()
         if model != config["model"]:
             update_project_config(project_id, model=model)
-        if web_search != config["web_search"]:
-            update_project_config(project_id, web_search=int(web_search))
 
         st.markdown("---")
 

@@ -16,9 +16,9 @@ ZHIPUAI_KB_BASE_URL = os.getenv("ZHIPUAI_KB_BASE_URL", "https://open.bigmodel.cn
 
 ZHIHU_ACCESS_SECRET = os.getenv("ZHIHU_ACCESS_SECRET", "")
 
-EXTRACT_MODEL = os.getenv("EXTRACT_MODEL", "GLM-4-Flash")
+EXTRACT_MODEL = os.getenv("EXTRACT_MODEL", "deepseek-v4-flash")
 EXTRACT_API_KEY = os.getenv("EXTRACT_API_KEY", "")
-EXTRACT_BASE_URL = os.getenv("EXTRACT_BASE_URL", "https://open.bigmodel.cn/api/llm")
+EXTRACT_BASE_URL = os.getenv("EXTRACT_BASE_URL", "https://api.deepseek.com")
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
