@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project data
+data/projects.db
+data/uploads/*
+data/exports/*
+!data/.gitkeep
+
+# Editor temporary files
+*.swp
+*.swo
+*~
