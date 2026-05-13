@@ -1,13 +1,14 @@
 import hashlib
 import hmac
 import json
+import secrets
 import time
 from pathlib import Path
 
 import streamlit as st
 from modules.config import APP_PASSWORD
 
-TOKEN_TTL = 48 * 3600
+TOKEN_TTL = 2 * 3600  # 缩短为2小时
 
 MAX_ATTEMPTS = 5
 ATTEMPT_WINDOW = 900
@@ -126,7 +127,20 @@ def _timing_safe_compare(a: str, b: str) -> bool:
 
 
 def _make_token(password: str, ts: int) -> str:
-    return hashlib.sha256(f"ddai_auth_{password}_{ts}".encode()).hexdigest()
+    """生成安全的认证Token，使用密码哈希"""
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    return hashlib.sha256(f"ddai_auth_{password_hash}_{ts}".encode()).hexdigest()
+
+
+def logout():
+    """登出，清除认证状态和URL中的Token"""
+    st.session_state.authenticated = False
+    # 清除URL中的认证参数
+    if "auth_token" in st.query_params:
+        del st.query_params["auth_token"]
+    if "auth_ts" in st.query_params:
+        del st.query_params["auth_ts"]
+    st.rerun()
 
 
 def check_password():
@@ -163,36 +177,41 @@ def check_password():
         max-width: 250px;
         margin: 0 auto;
     }
+    /* 隐藏 "Press Enter to submit form" 提示 */
+    .st-emotion-cache-gm93q9 {
+        display: none !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        with st.container(border=True):
+        with st.form("login_form", border=True):
             st.markdown("### 登录")
             st.markdown('<div class="login-input-wrapper">', unsafe_allow_html=True)
             password = st.text_input("请输入密码", type="password", label_visibility="collapsed",
                                      placeholder="请输入密码")
             st.markdown('</div>', unsafe_allow_html=True)
-            if st.button("登录", use_container_width=True, type="primary"):
-                rate_limit_msg = _check_rate_limit(client_ip)
-                if rate_limit_msg:
-                    st.error(rate_limit_msg)
-                    return False
+            if st.form_submit_button("登录", use_container_width=True, type="primary"):
+                    rate_limit_msg = _check_rate_limit(client_ip)
+                    if rate_limit_msg:
+                        st.error(rate_limit_msg)
+                        return False
 
-                if _timing_safe_compare(password, APP_PASSWORD):
-                    st.session_state.authenticated = True
-                    ts = int(time.time())
-                    st.query_params["auth_token"] = _make_token(APP_PASSWORD, ts)
-                    st.query_params["auth_ts"] = str(ts)
-                    st.rerun()
-                else:
-                    _record_failed_attempt(client_ip)
-                    remaining = MAX_ATTEMPTS - len(
-                        [ts for ts in _load_attempts()
-                         .get("attempts", {}).get(client_ip, {})
-                         .get("failed_attempts", [])
-                         if ts > time.time() - ATTEMPT_WINDOW]
-                    )
-                    st.error(f"密码错误，请重试（还可尝试 {max(0, remaining)} 次）")
+                    if _timing_safe_compare(password, APP_PASSWORD):
+                        st.session_state.authenticated = True
+                        ts = int(time.time())
+                        st.query_params["auth_token"] = _make_token(APP_PASSWORD, ts)
+                        st.query_params["auth_ts"] = str(ts)
+                        st.rerun()
+                    else:
+                        _record_failed_attempt(client_ip)
+                        remaining = MAX_ATTEMPTS - len(
+                            [ts for ts in _load_attempts()
+                             .get("attempts", {})
+                             .get(client_ip, {})
+                             .get("failed_attempts", [])
+                             if ts > time.time() - ATTEMPT_WINDOW]
+                        )
+                        st.error(f"密码错误，请重试（还可尝试 {max(0, remaining)} 次）")
     return False

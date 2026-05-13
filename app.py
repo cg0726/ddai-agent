@@ -103,9 +103,17 @@ section[data-testid="stSidebar"] hr {
 div[data-testid="stChatInput"] {
     border: 1px solid #d0d0d0;
     border-radius: 6px;
+    padding: 0 !important;
+}
+div[data-testid="stChatInput"] .st-emotion-cache-s1k4sy {
+    width: 100% !important;
+}
+div[data-testid="stChatInput"] textarea { 
+    font-size: 12px !important; 
+    width: 100% !important;
+    margin: 0 !important;
     padding: 4px 8px !important;
 }
-div[data-testid="stChatInput"] textarea { font-size: 12px !important; }
 .stChatMessage { padding: 4px 8px !important; }
 .stChatMessage p { font-size: 12px !important; margin-bottom: 2px !important; }
 
